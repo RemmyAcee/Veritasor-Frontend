@@ -20,10 +20,13 @@ function truncateLabel(label: string, max: number): { display: string; truncated
 const SEPARATOR_WIDTH_EST = 28
 const ELLIPSIS_BTN_WIDTH_EST = 44
 
-function setsEqual(a: Set<number>, b: Set<number>): boolean {
-  if (a.size !== b.size) return false
-  for (const v of a) if (!b.has(v)) return false
-  return true
+/**
+ * Crumb labels arrive from route definitions and API payloads, so they are not
+ * guaranteed to be strings at runtime. Coerce anything unusable to an empty
+ * label so a single bad item cannot take down the whole navigation.
+ */
+function normalizeLabel(label: unknown): string {
+  return typeof label === 'string' ? label : ''
 }
 
 function calculateHiddenIndices(
@@ -57,8 +60,21 @@ function calculateHiddenIndices(
       ELLIPSIS_BTN_WIDTH_EST
     if (visibleTotal <= containerWidth) break
   }
+}
 
-  return newHidden
+/**
+ * Serialize JSON-LD for inline injection. `</script>` inside a label would
+ * otherwise close the script element as soon as the document is parsed, so
+ * escape the characters HTML treats as markup. Consumers see identical strings
+ * after `JSON.parse`.
+ */
+function serializeJsonLd(data: unknown): string {
+  return JSON.stringify(data)
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')
 }
 
 export default function Breadcrumb({ items, maxLabelLength = 24 }: BreadcrumbProps) {
@@ -135,6 +151,8 @@ export default function Breadcrumb({ items, maxLabelLength = 24 }: BreadcrumbPro
     [hiddenItems.length],
   )
 
+  const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+
   const jsonLd = {
     '@context': 'https://schema.org',
     '@type': 'BreadcrumbList',
@@ -142,11 +160,11 @@ export default function Breadcrumb({ items, maxLabelLength = 24 }: BreadcrumbPro
       const listItem: Record<string, unknown> = {
         '@type': 'ListItem',
         position: index + 1,
-        name: item.label,
+        name: normalizeLabel(item.label),
       }
       if (item.href) {
-        const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
-        listItem.item = new URL(item.href, base).href
+        const absolute = toAbsoluteUrl(item.href, base)
+        if (absolute) listItem.item = absolute
       }
       return listItem
     }),
@@ -266,7 +284,7 @@ export default function Breadcrumb({ items, maxLabelLength = 24 }: BreadcrumbPro
 
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
     </>
   )
